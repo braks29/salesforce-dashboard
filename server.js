@@ -47,7 +47,9 @@ class SalesforceService {
         
         let fields = `
             Id, Name, StageName, Amount, CloseDate, CreatedDate, LastModifiedDate,
-            AccountId, Account.Name, Owner.Name, NextStep, Description
+            AccountId, Account.Name, Account.Phone, Account.PersonMobilePhone,
+            Phone__c,
+            Owner.Name, NextStep, Description
         `;
 
         // Simplified query - we'll do filtering on the client side
@@ -411,6 +413,9 @@ class DatabaseService {
                     last_modified TEXT,
                     last_contact_date TEXT,
                     account_name TEXT,
+                    account_phone TEXT,
+                    account_person_mobile_phone TEXT,
+                    opportunity_phone TEXT,
                     owner_name TEXT,
                     next_step TEXT,
                     description TEXT,
@@ -487,10 +492,30 @@ class DatabaseService {
                 'ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;'
             ];
 
+            // Add missing phone columns to opportunities table
+            const missingPhoneColumns = [
+                'ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS account_person_mobile_phone TEXT;',
+                'ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS opportunity_phone TEXT;'
+            ];
+
+            // Execute user preferences table updates
             for (const sql of missingColumns) {
                 try {
                     await this.db.query(sql);
                     console.log('Successfully executed:', sql.substring(0, 50) + '...');
+                } catch (err) {
+                    // Ignore errors for columns that already exist
+                    if (!err.message.includes('already exists')) {
+                        console.error('Error executing SQL:', sql, err.message);
+                    }
+                }
+            }
+
+            // Execute phone columns updates
+            for (const sql of missingPhoneColumns) {
+                try {
+                    await this.db.query(sql);
+                    console.log('Successfully executed phone column:', sql.substring(0, 50) + '...');
                 } catch (err) {
                     // Ignore errors for columns that already exist
                     if (!err.message.includes('already exists')) {
@@ -519,6 +544,9 @@ class DatabaseService {
                 last_modified TEXT,
                 last_contact_date TEXT,
                 account_name TEXT,
+                account_phone TEXT,
+                account_person_mobile_phone TEXT,
+                opportunity_phone TEXT,
                 owner_name TEXT,
                 next_step TEXT,
                 description TEXT,
@@ -538,11 +566,16 @@ class DatabaseService {
             )
         `;
         
-        // Add the new column if it doesn't exist (for existing databases)
+        // Add the new columns if they don't exist (for existing databases)
         const addLastContactDateColumn = `
             ALTER TABLE opportunities
             ADD COLUMN last_contact_date TEXT
         `;
+        
+        const addPhoneColumns = [
+            `ALTER TABLE opportunities ADD COLUMN account_person_mobile_phone TEXT`,
+            `ALTER TABLE opportunities ADD COLUMN opportunity_phone TEXT`
+        ];
 
         // User preferences table for client customizations
         const createUserPreferencesTable = `
@@ -581,11 +614,20 @@ class DatabaseService {
             } else {
                 console.log('Opportunities table ready');
                 
-                // Only try to add the new column after the table is created
+                // Only try to add the new columns after the table is created
                 this.db.run(addLastContactDateColumn, (err) => {
                     if (err && !err.message.includes('duplicate column name') && !err.message.includes('no such table')) {
                         console.error('Error adding last_contact_date column:', err);
                     }
+                });
+                
+                // Add phone columns for existing databases
+                addPhoneColumns.forEach((phoneColumnSql, index) => {
+                    this.db.run(phoneColumnSql, (err) => {
+                        if (err && !err.message.includes('duplicate column name') && !err.message.includes('no such table')) {
+                            console.error(`Error adding phone column ${index + 1}:`, err);
+                        }
+                    });
                 });
             }
         });
@@ -623,8 +665,9 @@ class DatabaseService {
                 'name = EXCLUDED.name, stage = EXCLUDED.stage, amount = EXCLUDED.amount, ' +
                 'close_date = EXCLUDED.close_date, created_date = EXCLUDED.created_date, ' +
                 'last_modified = EXCLUDED.last_modified, last_contact_date = EXCLUDED.last_contact_date, ' +
-                'account_name = EXCLUDED.account_name, owner_name = EXCLUDED.owner_name, ' +
-                'next_step = EXCLUDED.next_step, description = EXCLUDED.description, ' +
+                'account_name = EXCLUDED.account_name, account_phone = EXCLUDED.account_phone, ' +
+                'account_person_mobile_phone = EXCLUDED.account_person_mobile_phone, opportunity_phone = EXCLUDED.opportunity_phone, ' +
+                'owner_name = EXCLUDED.owner_name, next_step = EXCLUDED.next_step, description = EXCLUDED.description, ' +
                 'customer_preferences = EXCLUDED.customer_preferences, location = EXCLUDED.location, ' +
                 'last_sync = EXCLUDED.last_sync, is_active = EXCLUDED.is_active, updated_at = NOW()';
         }
@@ -729,9 +772,9 @@ class DatabaseService {
         const sql = `
             INSERT OR REPLACE INTO opportunities (
                 id, sf_id, name, stage, amount, close_date, created_date, last_modified, last_contact_date,
-                account_name, owner_name, next_step, description, customer_preferences,
+                account_name, account_phone, account_person_mobile_phone, opportunity_phone, owner_name, next_step, description, customer_preferences,
                 location, last_sync, is_active, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
         `;
         
         const params = [
@@ -745,6 +788,9 @@ class DatabaseService {
             sfOpp.LastModifiedDate,
             sfOpp.LastContactDate,
             sfOpp.Account?.Name,
+            sfOpp.Account?.Phone,
+            sfOpp.Account?.PersonMobilePhone,
+            sfOpp.Phone__c,
             sfOpp.Owner?.Name,
             sfOpp.NextStep,
             sfOpp.Description,
