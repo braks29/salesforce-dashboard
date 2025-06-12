@@ -846,6 +846,11 @@ const salesforceService = new SalesforceService();
 const databaseService = new DatabaseService();
 const engagementService = new EngagementAnalysisService();
 
+// Ensure database is initialized before starting server
+setTimeout(() => {
+    console.log('Database should be initialized now');
+}, 2000);
+
 // API Routes
 app.get('/api/opportunities', async (req, res) => {
     try {
@@ -1013,18 +1018,6 @@ app.get('/', (req, res) => {
 app.listen(PORT, async () => {
     console.log(`Server running on http://localhost:${PORT}`);
     
-    // Check if we need to do initial sync
-    try {
-        const lastSync = await databaseService.getLastSync();
-        if (!lastSync) {
-            console.log('No previous sync found. Performing initial sync from Salesforce...');
-            await databaseService.syncFromSalesforce(salesforceService);
-            console.log('Initial sync completed!');
-        } else {
-            console.log(`Last sync: ${lastSync.sync_timestamp} (${lastSync.records_synced} records)`);
-        }
-    } catch (error) {
-        console.error('Initial sync failed:', error.message);
-        console.log('Dashboard will work with empty data. Use /api/sync to manually sync.');
-    }
+    // Automatic sync disabled - use /api/sync endpoint to manually sync when SF credentials are fixed
+    console.log('Auto-sync disabled. Dashboard ready. Use /api/sync to manually sync with Salesforce.');
 });
