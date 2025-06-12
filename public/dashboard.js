@@ -15,9 +15,17 @@ class SalesforceDashboard {
         this.hasPendingChanges = false; // Track if changes need syncing
         this.lastSyncTime = 0; // Prevent sync spam
         this.minSyncInterval = 500; // Minimum 500ms between syncs
+        this.searchQuery = ''; // Current search query
+        this.searchResults = []; // Filtered search results
+        this.isSearchActive = false; // Track if search is active
+        this.searchAllQuery = ''; // Search All query
+        this.searchAllResults = []; // Search All results
+        this.allOpportunities = []; // All opportunities for Search All
+        this.isSearchAllActive = false; // Track if Search All is active
         
         this.initializeEventListeners();
         this.updateTodayDisplay();
+        this.initializeURLRouting();
         this.initializeApp(); // Load preferences first, then data
     }
 
@@ -39,6 +47,43 @@ class SalesforceDashboard {
         document.getElementById('weekly-btn').addEventListener('click', () => this.switchView('weekly'));
         document.getElementById('fiveyard-btn').addEventListener('click', () => this.switchView('fiveyard'));
         document.getElementById('followups-btn').addEventListener('click', () => this.switchView('followups'));
+        document.getElementById('search-btn').addEventListener('click', () => this.switchView('search'));
+        
+        // Search functionality
+        const searchInput = document.getElementById('search-input');
+        const clearSearchBtn = document.getElementById('clear-search-btn');
+        
+        searchInput.addEventListener('input', (e) => {
+            this.handleSearch(e.target.value);
+        });
+        
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                this.clearSearch();
+            }
+        });
+        
+        clearSearchBtn.addEventListener('click', () => {
+            this.clearSearch();
+        });
+        
+        // Search All functionality
+        const searchAllInput = document.getElementById('search-all-input');
+        const clearSearchAllBtn = document.getElementById('clear-search-all-btn');
+        
+        searchAllInput.addEventListener('input', (e) => {
+            this.handleSearchAll(e.target.value);
+        });
+        
+        searchAllInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                this.clearSearchAll();
+            }
+        });
+        
+        clearSearchAllBtn.addEventListener('click', () => {
+            this.clearSearchAll();
+        });
         
         // Priority filter
         document.getElementById('priority-select').addEventListener('change', (e) => {
@@ -100,6 +145,14 @@ class SalesforceDashboard {
         document.getElementById('clear-followup-btn').addEventListener('click', () => this.clearFollowUpDate());
         document.getElementById('complete-followup-btn').addEventListener('click', () => this.completeFollowUp());
         
+        // Quick day buttons for follow-up dates
+        document.addEventListener('click', (e) => {
+            if (e.target.classList.contains('quick-day-btn')) {
+                const days = parseInt(e.target.dataset.days);
+                this.setFollowUpDateDaysFromNow(days);
+            }
+        });
+        
         // Follow-ups view controls
         document.getElementById('followup-date-filter').addEventListener('change', (e) => {
             this.selectedFollowUpDate = e.target.value;
@@ -155,6 +208,10 @@ class SalesforceDashboard {
             
             const data = await response.json();
             this.currentData = data;
+            // Refresh search results if search is active
+            if (this.isSearchActive) {
+                this.performSearch();
+            }
             this.renderView();
             this.hideLoading();
         } catch (error) {
@@ -164,10 +221,15 @@ class SalesforceDashboard {
         }
     }
 
-    switchView(viewType) {
+    switchView(viewType, updateURL = true) {
         if (this.currentView === viewType) return;
         
         this.currentView = viewType;
+        
+        // Update URL hash if requested
+        if (updateURL) {
+            this.updateURL(viewType);
+        }
         
         // Update active button
         document.querySelectorAll('.view-tab').forEach(btn => btn.classList.remove('active'));
@@ -180,6 +242,31 @@ class SalesforceDashboard {
         this.loadData();
     }
 
+// URL Routing Methods
+    initializeURLRouting() {
+        // Listen for hash changes
+        window.addEventListener('hashchange', () => this.handleURLChange());
+        
+        // Handle initial load
+        this.handleURLChange();
+    }
+
+    handleURLChange() {
+        const hash = window.location.hash.slice(1); // Remove the # symbol
+        const validViews = ['weekly', 'fiveyard', 'followups', 'search'];
+        
+        if (hash && validViews.includes(hash)) {
+            this.switchView(hash, false); // Don't update URL to avoid infinite loop
+        } else if (!hash) {
+            // No hash, default to weekly view
+            this.updateURL('weekly');
+        }
+    }
+
+    updateURL(viewType) {
+        // Update the URL hash without triggering a page reload
+        window.history.replaceState(null, null, `#${viewType}`);
+    }
     renderView() {
         if (this.currentView === 'weekly') {
             this.renderWeeklyView();
@@ -187,6 +274,8 @@ class SalesforceDashboard {
             this.renderFiveYardView();
         } else if (this.currentView === 'followups') {
             this.renderFollowupsView();
+        } else if (this.currentView === 'search') {
+            this.renderSearchView();
         }
     }
 
@@ -199,6 +288,259 @@ class SalesforceDashboard {
             const userPref = this.userPreferences.get(opp.id) || {};
             const oppPriority = userPref.priority || 'gray'; // Default to gray if no priority set
             return oppPriority === this.currentPriority;
+        });
+    }
+
+    // Search functionality
+    handleSearch(query) {
+        this.searchQuery = query.trim();
+        const searchInput = document.getElementById('search-input');
+        const clearBtn = document.getElementById('clear-search-btn');
+        
+        if (this.searchQuery) {
+            clearBtn.classList.add('show');
+            this.isSearchActive = true;
+            this.performSearch();
+        } else {
+            clearBtn.classList.remove('show');
+            this.isSearchActive = false;
+            this.searchResults = [];
+            this.updateSearchResults();
+            this.renderView(); // Show all data again
+        }
+    }
+
+    clearSearch() {
+        const searchInput = document.getElementById('search-input');
+        const clearBtn = document.getElementById('clear-search-btn');
+        
+        searchInput.value = '';
+        clearBtn.classList.remove('show');
+        this.searchQuery = '';
+        this.isSearchActive = false;
+        this.searchResults = [];
+        this.updateSearchResults();
+        this.renderView(); // Show all data again
+        searchInput.focus();
+    }
+
+    performSearch() {
+        if (!this.searchQuery) {
+            this.searchResults = [];
+            this.updateSearchResults();
+            return;
+        }
+
+        const query = this.searchQuery.toLowerCase();
+        
+        // Search across multiple fields
+        this.searchResults = this.currentData.filter(opportunity => {
+            const searchFields = [
+                opportunity.name || '',
+                opportunity.account_name || '',
+                opportunity.owner_name || '',
+                opportunity.stage || '',
+                opportunity.location || '',
+                opportunity.customer_preferences || '',
+                opportunity.description || '',
+                opportunity.next_step || '',
+                opportunity.custom_notes || '',
+                (opportunity.amount || '').toString(),
+                opportunity.sf_id || ''
+            ];
+            
+            return searchFields.some(field =>
+                field.toLowerCase().includes(query)
+            );
+        });
+
+        this.updateSearchResults();
+        this.renderView(); // Re-render with search results
+    }
+
+    updateSearchResults() {
+        const resultsCount = document.getElementById('search-results-count');
+        
+        if (this.isSearchActive) {
+            const count = this.searchResults.length;
+            const total = this.currentData.length;
+            resultsCount.textContent = `${count} of ${total} opportunities`;
+            resultsCount.classList.add('highlight');
+        } else {
+            resultsCount.textContent = '';
+            resultsCount.classList.remove('highlight');
+        }
+    }
+
+    // Get the data to display (either search results or all data)
+    getDisplayData() {
+        if (this.isSearchActive) {
+            return this.searchResults;
+        }
+        return this.currentData;
+    }
+
+    // Search All functionality
+    handleSearchAll(query) {
+        this.searchAllQuery = query.trim();
+        const searchInput = document.getElementById('search-all-input');
+        const clearBtn = document.getElementById('clear-search-all-btn');
+        
+        if (this.searchAllQuery) {
+            clearBtn.classList.add('show');
+            this.isSearchAllActive = true;
+            this.performSearchAll();
+        } else {
+            clearBtn.classList.remove('show');
+            this.isSearchAllActive = false;
+            this.searchAllResults = [];
+            this.updateSearchAllResults();
+            this.renderSearchView();
+        }
+    }
+
+    clearSearchAll() {
+        const searchInput = document.getElementById('search-all-input');
+        const clearBtn = document.getElementById('clear-search-all-btn');
+        
+        searchInput.value = '';
+        clearBtn.classList.remove('show');
+        this.searchAllQuery = '';
+        this.isSearchAllActive = false;
+        this.searchAllResults = [];
+        this.updateSearchAllResults();
+        this.renderSearchView();
+        searchInput.focus();
+    }
+
+    async performSearchAll() {
+        if (!this.searchAllQuery) {
+            this.searchAllResults = [];
+            this.updateSearchAllResults();
+            return;
+        }
+
+        // Load all opportunities if not already loaded
+        if (this.allOpportunities.length === 0) {
+            await this.loadAllOpportunities();
+        }
+
+        const query = this.searchAllQuery.toLowerCase();
+        
+        // Search across multiple fields in all opportunities
+        this.searchAllResults = this.allOpportunities.filter(opportunity => {
+            const searchFields = [
+                opportunity.name || '',
+                opportunity.account_name || '',
+                opportunity.owner_name || '',
+                opportunity.stage || '',
+                opportunity.location || '',
+                opportunity.customer_preferences || '',
+                opportunity.description || '',
+                opportunity.next_step || '',
+                opportunity.custom_notes || '',
+                (opportunity.amount || '').toString(),
+                opportunity.sf_id || '',
+                opportunity.close_date || '',
+                opportunity.created_date || ''
+            ];
+            
+            return searchFields.some(field =>
+                field.toLowerCase().includes(query)
+            );
+        });
+
+        this.updateSearchAllResults();
+        this.renderSearchView();
+    }
+
+    async loadAllOpportunities() {
+        try {
+            this.showLoading();
+            const response = await fetch('/api/opportunities?view=all');
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            this.allOpportunities = data;
+            this.hideLoading();
+        } catch (error) {
+            console.error('Error loading all opportunities:', error);
+            this.showError('Failed to load all opportunities.');
+            this.hideLoading();
+        }
+    }
+
+    updateSearchAllResults() {
+        const resultsCount = document.getElementById('search-all-count');
+        const totalCount = document.getElementById('search-all-total');
+        
+        if (this.isSearchAllActive) {
+            const count = this.searchAllResults.length;
+            const total = this.allOpportunities.length;
+            resultsCount.textContent = `Found ${count} opportunities`;
+            resultsCount.classList.add('highlight');
+            totalCount.textContent = `out of ${total} total`;
+        } else {
+            resultsCount.textContent = 'Enter a search term to find opportunities';
+            resultsCount.classList.remove('highlight');
+            totalCount.textContent = '';
+        }
+    }
+
+    renderSearchView() {
+        const container = document.getElementById('search-all-cards');
+        if (!container) return;
+        
+        // Clear existing content
+        container.innerHTML = '';
+        
+        if (!this.isSearchAllActive || this.searchAllResults.length === 0) {
+            // Show placeholder or "no results" message
+            if (this.isSearchAllActive && this.searchAllQuery) {
+                container.innerHTML = `
+                    <div class="search-all-placeholder">
+                        <i class="fas fa-search search-placeholder-icon"></i>
+                        <h3>No Results Found</h3>
+                        <p>No opportunities found for "${this.searchAllQuery}"</p>
+                        <p>Try different keywords or check your spelling.</p>
+                    </div>
+                `;
+            } else {
+                container.innerHTML = `
+                    <div class="search-all-placeholder">
+                        <i class="fas fa-search search-placeholder-icon"></i>
+                        <h3>Search All Your Opportunities</h3>
+                        <p>Search across all opportunities in your database by:</p>
+                        <ul class="search-capabilities">
+                            <li><i class="fas fa-user"></i> Account names</li>
+                            <li><i class="fas fa-building"></i> Company names</li>
+                            <li><i class="fas fa-map-marker-alt"></i> Locations</li>
+                            <li><i class="fas fa-tasks"></i> Stages</li>
+                            <li><i class="fas fa-sticky-note"></i> Notes & descriptions</li>
+                            <li><i class="fas fa-dollar-sign"></i> Amounts</li>
+                            <li><i class="fas fa-tag"></i> Opportunity IDs</li>
+                        </ul>
+                        <p class="search-hint">Start typing above to search through all your opportunities...</p>
+                    </div>
+                `;
+            }
+            return;
+        }
+        
+        // Sort results by last modified date (most recent first)
+        const sortedResults = [...this.searchAllResults].sort((a, b) => {
+            const aDate = new Date(a.last_modified || a.created_date);
+            const bDate = new Date(b.last_modified || b.created_date);
+            return bDate - aDate;
+        });
+        
+        // Render search results as cards
+        sortedResults.forEach(opportunity => {
+            const card = this.createOpportunityCard(opportunity);
+            card.classList.add('search-result-card');
+            container.appendChild(card);
         });
     }
 
@@ -232,8 +574,10 @@ class SalesforceDashboard {
             }
         });
 
+        // Use search results if search is active, otherwise use all data
+        const displayData = this.getDisplayData();
         // Filter by priority first, then group by weekday
-        const filteredData = this.filterOpportunitiesByPriority(this.currentData);
+        const filteredData = this.filterOpportunitiesByPriority(displayData);
         const groupedData = this.groupByWeekday(filteredData);
         
         Object.entries(groupedData).forEach(([day, opportunities]) => {
@@ -250,13 +594,18 @@ class SalesforceDashboard {
         const container = document.getElementById('horizontal-cards');
         if (!container) return;
         
+        // Hide container to prevent layout shift during positioning
+        container.style.visibility = 'hidden';
+        
         // Clear cached bounds when re-rendering
         this.containerBounds = null;
         
         container.innerHTML = '';
         
+        // Use search results if search is active, otherwise use all data
+        const displayData = this.getDisplayData();
         // Filter by priority first, then filter for five-yard line opportunities
-        const filteredData = this.filterOpportunitiesByPriority(this.currentData);
+        const filteredData = this.filterOpportunitiesByPriority(displayData);
         const fiveYardOpportunities = filteredData.filter(opp => {
             const userPref = this.userPreferences.get(opp.id) || {};
             return userPref.fiveYardLine;
@@ -286,8 +635,17 @@ class SalesforceDashboard {
         fiveYardOpportunities.forEach(opp => {
             const card = this.createOpportunityCard(opp);
             card.classList.add('horizontal');
+            
+            // Apply positioning IMMEDIATELY before adding to DOM
+            this.positionCardHorizontallyImmediate(card, opp);
+            
             container.appendChild(card);
         });
+        
+        // Show container after all cards are added and positioned
+        setTimeout(() => {
+            container.style.visibility = 'visible';
+        }, 10);
         
         // Update stats based on filtered data
         const needsFollowUp = filteredData.filter(opp => this.checkNeedsFollowUp(opp)).length;
@@ -303,8 +661,10 @@ class SalesforceDashboard {
         
         container.innerHTML = '';
         
+        // Use search results if search is active, otherwise use all data
+        const displayData = this.getDisplayData();
         // Filter by priority first, then by follow-up date
-        const filteredData = this.filterOpportunitiesByPriority(this.currentData);
+        const filteredData = this.filterOpportunitiesByPriority(displayData);
         const targetDate = this.selectedFollowUpDate || new Date().toISOString().split('T')[0];
         const followupOpportunities = filteredData.filter(opp => {
             const userPref = this.userPreferences.get(opp.id) || {};
@@ -514,10 +874,7 @@ class SalesforceDashboard {
             ${statusTag}
         `;
         
-        // Position card horizontally in five-yard view (optimized)
-        if (this.currentView === 'fiveyard') {
-            this.positionCardHorizontally(card, opportunity);
-        }
+        // Positioning is now handled in renderFiveYardView() to prevent layout shift
         
         return card;
     }
@@ -1234,45 +1591,75 @@ class SalesforceDashboard {
         
         // Re-render the view
         this.renderView();
+    }
+
+    // Immediate positioning method that doesn't wait for container layout
+    positionCardHorizontallyImmediate(card, opportunity) {
+        const userPref = this.userPreferences.get(opportunity.id) || {};
         
-        this.showSuccessMessage(`Moved opportunity to ${newStage}`);
+        // Use a reasonable default container width to avoid layout dependency
+        const estimatedContainerWidth = 1200; // Reasonable estimate for most screens
+        const intentLevel = userPref.intentLevel !== undefined ? userPref.intentLevel : 8;
+        
+        // Calculate position immediately
+        const positionX = ((intentLevel - 1) / 9) * estimatedContainerWidth;
+        const positionY = userPref.positionY !== undefined ? userPref.positionY : 20;
+        
+        // Apply positioning styles immediately with no transitions
+        card.style.cssText += `
+            position: absolute !important;
+            transform: translate(${positionX}px, ${positionY}px) !important;
+            transition: none !important;
+        `;
+        
+        // Store position data
+        card.dataset.intentLevel = intentLevel;
+        card.dataset.positionX = positionX;
+        card.dataset.positionY = positionY;
+        
+        // Update preferences
+        userPref.positionX = positionX;
+        userPref.positionY = positionY;
+        userPref.intentLevel = intentLevel;
+        userPref.fiveYardLine = true;
+        this.userPreferences.set(opportunity.id, userPref);
     }
 
     // Optimized Horizontal Five-Yard View Methods
     positionCardHorizontally(card, opportunity) {
         const userPref = this.userPreferences.get(opportunity.id) || {};
         
+        // Pre-calculate dimensions to avoid layout thrashing
+        const container = document.getElementById('horizontal-cards');
+        if (!container) return;
+        
+        const containerWidth = container.offsetWidth - 200;
+        const intentLevel = userPref.intentLevel !== undefined ? userPref.intentLevel : 8;
+        
         let positionX, positionY;
         
-        // Check if we have saved coordinates
-        if (userPref.positionX !== undefined && userPref.positionY !== undefined) {
-            // Use saved exact positions
-            positionX = userPref.positionX;
-            positionY = userPref.positionY;
-        } else {
-            // First time placement - calculate from intent level
-            const container = document.getElementById('horizontal-cards');
-            if (!container) return;
-            
-            const intentLevel = userPref.intentLevel || 5; // Default to middle
-            const containerWidth = container.offsetWidth - 200;
-            positionX = ((intentLevel - 1) / 9) * containerWidth;
-            positionY = 20; // Default vertical position
-            
-            // Save these initial positions
+        // Always use intent level calculation for consistency
+        positionX = ((intentLevel - 1) / 9) * containerWidth;
+        positionY = userPref.positionY !== undefined ? userPref.positionY : 20;
+        
+        // Apply positioning styles immediately as a single batch
+        card.style.cssText += `
+            position: absolute;
+            transform: translate(${positionX}px, ${positionY}px);
+        `;
+        
+        // Update preferences if needed
+        if (userPref.positionX !== positionX || userPref.positionY !== positionY) {
             userPref.positionX = positionX;
             userPref.positionY = positionY;
-            userPref.fiveYardLine = true; // Ensure five-yard flag is set during initial positioning
+            userPref.intentLevel = intentLevel;
+            userPref.fiveYardLine = true;
             this.userPreferences.set(opportunity.id, userPref);
-            this.saveUserPreferences(true); // Instant sync for initial positioning
+            this.saveUserPreferences(true);
         }
         
-        // Apply the position
-        card.style.transform = `translate(${positionX}px, ${positionY}px)`;
-        card.style.position = 'absolute';
-        
         // Store position data
-        card.dataset.intentLevel = userPref.intentLevel || 5;
+        card.dataset.intentLevel = intentLevel;
         card.dataset.positionX = positionX;
         card.dataset.positionY = positionY;
     }
@@ -1433,6 +1820,27 @@ class SalesforceDashboard {
         
         // Also clear from server
         this.saveFollowUpDate(this.currentOpportunity.id, null);
+    }
+
+    setFollowUpDateDaysFromNow(days) {
+        const today = new Date();
+        today.setDate(today.getDate() + days);
+        
+        // Format date as YYYY-MM-DD for input[type="date"]
+        const dateString = today.toISOString().split('T')[0];
+        
+        // Set the date picker value
+        document.getElementById('followup-date-picker').value = dateString;
+        
+        // Visual feedback - highlight the selected button temporarily
+        document.querySelectorAll('.quick-day-btn').forEach(btn => btn.classList.remove('selected'));
+        const selectedBtn = document.querySelector(`.quick-day-btn[data-days="${days}"]`);
+        if (selectedBtn) {
+            selectedBtn.classList.add('selected');
+            setTimeout(() => selectedBtn.classList.remove('selected'), 1000);
+        }
+        
+        console.log(`📅 Set follow-up date to ${days} day${days === 1 ? '' : 's'} from now: ${dateString}`);
     }
 
     formatDateForInput(dateString) {

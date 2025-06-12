@@ -3,11 +3,12 @@ const jsforce = require('jsforce');
 const cors = require('cors');
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
+const { Client } = require('pg');
 const OpenAI = require('openai');
 require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 
 // Middleware
 app.use(cors());
@@ -264,8 +265,6 @@ class SalesforceService {
             }));
         }
     }
-
-    // Old getOpportunities method removed - now using local database via DatabaseService
 }
 
 // OpenAI Engagement Analysis Service
@@ -353,10 +352,32 @@ Score 1 = No engagement, Score 5 = Highly engaged`;
 class DatabaseService {
     constructor() {
         this.db = null;
+        this.isPostgres = false;
         this.initDatabase();
     }
 
-    initDatabase() {
+    async initDatabase() {
+        // Check if we have a PostgreSQL database URL (Railway provides this)
+        if (process.env.DATABASE_URL) {
+            try {
+                this.db = new Client({
+                    connectionString: process.env.DATABASE_URL,
+                    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+                });
+                await this.db.connect();
+                this.isPostgres = true;
+                console.log('Connected to PostgreSQL database');
+                await this.createTables();
+            } catch (error) {
+                console.error('Error connecting to PostgreSQL:', error);
+                this.fallbackToSQLite();
+            }
+        } else {
+            this.fallbackToSQLite();
+        }
+    }
+
+    fallbackToSQLite() {
         this.db = new sqlite3.Database('./opportunities.db', (err) => {
             if (err) {
                 console.error('Error opening database:', err);
@@ -367,8 +388,125 @@ class DatabaseService {
         });
     }
 
-    createTables() {
-        // Opportunities table with Salesforce data + custom fields + engagement analysis
+    async createTables() {
+        if (this.isPostgres) {
+            await this.createPostgresTables();
+        } else {
+            this.createSQLiteTables();
+        }
+    }
+
+    async createPostgresTables() {
+        try {
+            // Opportunities table with PostgreSQL syntax
+            const createOpportunitiesTable = `
+                CREATE TABLE IF NOT EXISTS opportunities (
+                    id TEXT PRIMARY KEY,
+                    sf_id TEXT UNIQUE,
+                    name TEXT,
+                    stage TEXT,
+                    amount DECIMAL,
+                    close_date TEXT,
+                    created_date TEXT,
+                    last_modified TEXT,
+                    last_contact_date TEXT,
+                    account_name TEXT,
+                    owner_name TEXT,
+                    next_step TEXT,
+                    description TEXT,
+                    priority_level INTEGER DEFAULT 1,
+                    custom_notes TEXT,
+                    follow_up_date TEXT,
+                    customer_preferences TEXT,
+                    location TEXT,
+                    last_sync TEXT,
+                    is_active INTEGER DEFAULT 1,
+                    engagement_score INTEGER DEFAULT 0,
+                    engagement_analysis TEXT,
+                    has_engagement INTEGER DEFAULT 0,
+                    engagement_analyzed_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            `;
+
+            // User preferences table for PostgreSQL
+            const createUserPreferencesTable = `
+                CREATE TABLE IF NOT EXISTS user_preferences (
+                    id SERIAL PRIMARY KEY,
+                    user_id TEXT DEFAULT 'default',
+                    opportunity_id TEXT,
+                    priority_color TEXT DEFAULT 'gray',
+                    intent_level INTEGER DEFAULT 5,
+                    five_yard_line INTEGER DEFAULT 0,
+                    follow_up_date TEXT,
+                    position_x DECIMAL,
+                    position_y DECIMAL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, opportunity_id)
+                )
+            `;
+
+            // Sync log table for PostgreSQL
+            const createSyncLogTable = `
+                CREATE TABLE IF NOT EXISTS sync_log (
+                    id SERIAL PRIMARY KEY,
+                    sync_type TEXT,
+                    sync_status TEXT,
+                    records_synced INTEGER,
+                    error_message TEXT,
+                    sync_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            `;
+
+            await this.db.query(createOpportunitiesTable);
+            console.log('PostgreSQL opportunities table ready');
+
+            await this.db.query(createUserPreferencesTable);
+            console.log('PostgreSQL user preferences table ready');
+
+            await this.db.query(createSyncLogTable);
+            console.log('PostgreSQL sync log table ready');
+
+            // Add missing columns to existing tables
+            await this.addMissingColumns();
+
+        } catch (error) {
+            console.error('Error creating PostgreSQL tables:', error);
+        }
+    }
+
+    async addMissingColumns() {
+        try {
+            // Add missing columns to user_preferences table
+            const missingColumns = [
+                'ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS position_x DECIMAL;',
+                'ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS position_y DECIMAL;',
+                'ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;',
+                'ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;'
+            ];
+
+            for (const sql of missingColumns) {
+                try {
+                    await this.db.query(sql);
+                    console.log('Successfully executed:', sql.substring(0, 50) + '...');
+                } catch (err) {
+                    // Ignore errors for columns that already exist
+                    if (!err.message.includes('already exists')) {
+                        console.log('Migration warning:', err.message.substring(0, 100));
+                    }
+                }
+            }
+
+            console.log('PostgreSQL schema migration completed');
+        } catch (error) {
+            console.error('Error in schema migration:', error);
+        }
+    }
+
+    createSQLiteTables() {
+        // SQLite table definitions (original code)
         const createOpportunitiesTable = `
             CREATE TABLE IF NOT EXISTS opportunities (
                 id TEXT PRIMARY KEY,
@@ -438,14 +576,17 @@ class DatabaseService {
         `;
 
         this.db.run(createOpportunitiesTable, (err) => {
-            if (err) console.error('Error creating opportunities table:', err);
-            else console.log('Opportunities table ready');
-        });
-
-        // Try to add the new column for existing databases (will fail silently if column exists)
-        this.db.run(addLastContactDateColumn, (err) => {
-            if (err && !err.message.includes('duplicate column name')) {
-                console.error('Error adding last_contact_date column:', err);
+            if (err) {
+                console.error('Error creating opportunities table:', err);
+            } else {
+                console.log('Opportunities table ready');
+                
+                // Only try to add the new column after the table is created
+                this.db.run(addLastContactDateColumn, (err) => {
+                    if (err && !err.message.includes('duplicate column name') && !err.message.includes('no such table')) {
+                        console.error('Error adding last_contact_date column:', err);
+                    }
+                });
             }
         });
 
@@ -458,6 +599,102 @@ class DatabaseService {
             if (err) console.error('Error creating sync_log table:', err);
             else console.log('Sync log table ready');
         });
+    }
+
+    // Database adapter methods to work with both SQLite and PostgreSQL
+    convertSqlToPostgres(sql, params) {
+        if (!this.isPostgres) return { sql, params };
+        
+        // Convert ? placeholders to $1, $2, etc.
+        let paramCount = 0;
+        const convertedSql = sql.replace(/\?/g, () => `$${++paramCount}`);
+        
+        // Convert SQLite functions to PostgreSQL
+        let finalSql = convertedSql
+            .replace(/CURRENT_TIMESTAMP/g, 'NOW()')
+            .replace(/INSERT OR REPLACE/g, 'INSERT');
+        
+        // Handle UPSERT for opportunities table
+        if (finalSql.includes('INSERT INTO opportunities') && sql.includes('INSERT OR REPLACE')) {
+            finalSql = finalSql.replace(
+                ') VALUES (',
+                ') VALUES ('
+            ) + ' ON CONFLICT (sf_id) DO UPDATE SET ' +
+                'name = EXCLUDED.name, stage = EXCLUDED.stage, amount = EXCLUDED.amount, ' +
+                'close_date = EXCLUDED.close_date, created_date = EXCLUDED.created_date, ' +
+                'last_modified = EXCLUDED.last_modified, last_contact_date = EXCLUDED.last_contact_date, ' +
+                'account_name = EXCLUDED.account_name, owner_name = EXCLUDED.owner_name, ' +
+                'next_step = EXCLUDED.next_step, description = EXCLUDED.description, ' +
+                'customer_preferences = EXCLUDED.customer_preferences, location = EXCLUDED.location, ' +
+                'last_sync = EXCLUDED.last_sync, is_active = EXCLUDED.is_active, updated_at = NOW()';
+        }
+        
+        return { sql: finalSql, params };
+    }
+
+    async dbAll(sql, params = []) {
+        if (this.isPostgres) {
+            try {
+                const { sql: convertedSql, params: convertedParams } = this.convertSqlToPostgres(sql, params);
+                const result = await this.db.query(convertedSql, convertedParams);
+                return result.rows;
+            } catch (error) {
+                throw error;
+            }
+        } else {
+            return new Promise((resolve, reject) => {
+                this.db.all(sql, params, (err, rows) => {
+                    if (err) reject(err);
+                    else resolve(rows);
+                });
+            });
+        }
+    }
+
+    async dbGet(sql, params = []) {
+        if (this.isPostgres) {
+            try {
+                const { sql: convertedSql, params: convertedParams } = this.convertSqlToPostgres(sql, params);
+                const result = await this.db.query(convertedSql, convertedParams);
+                return result.rows[0];
+            } catch (error) {
+                throw error;
+            }
+        } else {
+            return new Promise((resolve, reject) => {
+                this.db.get(sql, params, (err, row) => {
+                    if (err) reject(err);
+                    else resolve(row);
+                });
+            });
+        }
+    }
+
+    async dbRun(sql, params = []) {
+        if (this.isPostgres) {
+            try {
+                const { sql: convertedSql, params: convertedParams } = this.convertSqlToPostgres(sql, params);
+                console.log('PostgreSQL Converted SQL:', convertedSql);
+                console.log('PostgreSQL Converted Params:', convertedParams);
+                
+                const result = await this.db.query(convertedSql, convertedParams);
+                console.log('PostgreSQL Query Result:', { insertId: result.insertId, rowCount: result.rowCount, rows: result.rows?.length });
+                
+                return { lastID: result.insertId, changes: result.rowCount };
+            } catch (error) {
+                console.error('PostgreSQL Query Error:', error);
+                console.error('Failed SQL:', sql);
+                console.error('Failed Params:', params);
+                throw error;
+            }
+        } else {
+            return new Promise((resolve, reject) => {
+                this.db.run(sql, params, function(err) {
+                    if (err) reject(err);
+                    else resolve({ lastID: this.lastID, changes: this.changes });
+                });
+            });
+        }
     }
 
     async syncFromSalesforce(salesforceService) {
@@ -487,43 +724,47 @@ class DatabaseService {
     }
 
     async upsertOpportunity(sfOpp) {
-        return new Promise((resolve, reject) => {
-            const parsedInfo = this.parseOpportunityName(sfOpp.Name);
-            
-            const sql = `
-                INSERT OR REPLACE INTO opportunities (
-                    sf_id, name, stage, amount, close_date, created_date, last_modified, last_contact_date,
-                    account_name, owner_name, next_step, description, customer_preferences,
-                    location, last_sync, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            `;
-            
-            const params = [
-                sfOpp.Id,
-                sfOpp.Name,
-                sfOpp.StageName,
-                sfOpp.Amount,
-                sfOpp.CloseDate,
-                sfOpp.CreatedDate,
-                sfOpp.LastModifiedDate,
-                sfOpp.LastContactDate,
-                sfOpp.Account?.Name,
-                sfOpp.Owner?.Name,
-                sfOpp.NextStep,
-                sfOpp.Description,
-                parsedInfo.preferences || '',
-                parsedInfo.location,
-                new Date().toISOString()
-            ];
+        const parsedInfo = this.parseOpportunityName(sfOpp.Name);
+        
+        const sql = `
+            INSERT OR REPLACE INTO opportunities (
+                id, sf_id, name, stage, amount, close_date, created_date, last_modified, last_contact_date,
+                account_name, owner_name, next_step, description, customer_preferences,
+                location, last_sync, is_active, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+        `;
+        
+        const params = [
+            sfOpp.Id, // Use sf_id for both id and sf_id columns
+            sfOpp.Id,
+            sfOpp.Name,
+            sfOpp.StageName,
+            sfOpp.Amount,
+            sfOpp.CloseDate,
+            sfOpp.CreatedDate,
+            sfOpp.LastModifiedDate,
+            sfOpp.LastContactDate,
+            sfOpp.Account?.Name,
+            sfOpp.Owner?.Name,
+            sfOpp.NextStep,
+            sfOpp.Description,
+            parsedInfo.preferences || '',
+            parsedInfo.location,
+            new Date().toISOString()
+        ];
 
-            this.db.run(sql, params, function(err) {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(this.lastID);
-                }
-            });
-        });
+        console.log(`Upserting opportunity: ${sfOpp.Name} (${sfOpp.Id})`);
+        console.log('Original SQL:', sql);
+        console.log('Parameters:', params);
+        
+        try {
+            const result = await this.dbRun(sql, params);
+            console.log('Upsert result:', result);
+            return result;
+        } catch (error) {
+            console.error('Upsert error for opportunity', sfOpp.Id, ':', error);
+            throw error;
+        }
     }
 
     parseOpportunityName(opportunityName) {
@@ -557,50 +798,61 @@ class DatabaseService {
     }
 
     async getOpportunities(filters = {}) {
-        return new Promise((resolve, reject) => {
-            let sql = `
-                SELECT * FROM opportunities
-                WHERE is_active = 1
-            `;
-            
-            const params = [];
-            
-            // Apply filters
-            if (filters.excludeOwner) {
+        console.log('getOpportunities called with filters:', filters);
+        
+        let sql = `
+            SELECT * FROM opportunities
+            WHERE is_active = 1
+        `;
+        
+        const params = [];
+        
+        // Apply filters
+        if (filters.excludeOwners && Array.isArray(filters.excludeOwners)) {
+            for (const owner of filters.excludeOwners) {
                 sql += ` AND LOWER(owner_name) NOT LIKE LOWER(?)`;
-                params.push(`%${filters.excludeOwner}%`);
+                params.push(`%${owner}%`);
             }
-            
-            if (filters.excludeUpgradeDesign) {
-                sql += ` AND LOWER(name) NOT LIKE '%upgrade%' AND LOWER(name) NOT LIKE '%design%'`;
-            }
-            
-            if (filters.week) {
-                const { startDate, endDate } = this.getWeekDateRange(filters.week);
-                sql += ` AND created_date >= ? AND created_date <= ?`;
-                params.push(startDate.toISOString(), endDate.toISOString());
-            }
-            
-            if (filters.viewType === 'fiveyard') {
-                const thirtyDaysFromNow = new Date();
-                thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
-                sql += ` AND (close_date <= ? OR stage IN ('Proposal/Price Quote', 'Negotiation/Review', 'Closed Won'))`;
-                params.push(thirtyDaysFromNow.toISOString().split('T')[0]);
-            }
-            
-            // Priority filtering is handled on the frontend, not in database
-            // Remove database-level priority filtering since priority_color column doesn't exist
-            
+        } else if (filters.excludeOwner) {
+            // Backward compatibility for single excludeOwner
+            sql += ` AND LOWER(owner_name) NOT LIKE LOWER(?)`;
+            params.push(`%${filters.excludeOwner}%`);
+        }
+        
+        if (filters.excludeUpgradeDesign) {
+            sql += ` AND LOWER(name) NOT LIKE '%upgrade%' AND LOWER(name) NOT LIKE '%design%'`;
+        }
+        
+        if (filters.week) {
+            const { startDate, endDate } = this.getWeekDateRange(filters.week);
+            sql += ` AND created_date >= ? AND created_date <= ?`;
+            params.push(startDate.toISOString(), endDate.toISOString());
+        }
+        
+        if (filters.viewType === 'fiveyard') {
+            const thirtyDaysFromNow = new Date();
+            thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
+            sql += ` AND (close_date <= ? OR stage IN ('Proposal/Price Quote', 'Negotiation/Review', 'Closed Won'))`;
+            params.push(thirtyDaysFromNow.toISOString().split('T')[0]);
+        }
+        
+        if (filters.viewType === 'all') {
+            sql += ` ORDER BY last_modified DESC`;
+        } else {
             sql += ` ORDER BY last_modified DESC LIMIT 100`;
-            
-            this.db.all(sql, params, (err, rows) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(rows.map(row => this.formatOpportunity(row)));
-                }
-            });
-        });
+        }
+        
+        console.log('Final SQL query:', sql);
+        console.log('Query parameters:', params);
+        
+        const rows = await this.dbAll(sql, params);
+        console.log(`Query returned ${rows ? rows.length : 0} rows`);
+        
+        if (rows && rows.length > 0) {
+            console.log('Sample row:', rows[0]);
+        }
+        
+        return rows.map(row => this.formatOpportunity(row));
     }
 
     formatOpportunity(row) {
@@ -681,78 +933,49 @@ class DatabaseService {
     }
 
     async updatePriority(opportunityId, priorityLevel) {
-        return new Promise((resolve, reject) => {
-            const sql = `UPDATE opportunities SET priority_level = ?, updated_at = CURRENT_TIMESTAMP WHERE sf_id = ?`;
-            this.db.run(sql, [priorityLevel, opportunityId], function(err) {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(this.changes);
-                }
-            });
-        });
+        const sql = `UPDATE opportunities SET priority_level = ?, updated_at = CURRENT_TIMESTAMP WHERE sf_id = ?`;
+        return await this.dbRun(sql, [priorityLevel, opportunityId]);
     }
 
     async updateCustomNotes(opportunityId, notes) {
-        return new Promise((resolve, reject) => {
-            const sql = `UPDATE opportunities SET custom_notes = ?, updated_at = CURRENT_TIMESTAMP WHERE sf_id = ?`;
-            this.db.run(sql, [notes, opportunityId], function(err) {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(this.changes);
-                }
-            });
-        });
+        const sql = `UPDATE opportunities SET custom_notes = ?, updated_at = CURRENT_TIMESTAMP WHERE sf_id = ?`;
+        return await this.dbRun(sql, [notes, opportunityId]);
     }
 
     async setFollowUpDate(opportunityId, followUpDate) {
-        return new Promise((resolve, reject) => {
-            const sql = `UPDATE opportunities SET follow_up_date = ?, updated_at = CURRENT_TIMESTAMP WHERE sf_id = ?`;
-            this.db.run(sql, [followUpDate, opportunityId], function(err) {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(this.changes);
-                }
-            });
-        });
+        const sql = `UPDATE opportunities SET follow_up_date = ?, updated_at = CURRENT_TIMESTAMP WHERE sf_id = ?`;
+        return await this.dbRun(sql, [followUpDate, opportunityId]);
     }
 
     async logSync(syncType, status, recordsCount, errorMessage = null) {
-        return new Promise((resolve, reject) => {
-            const sql = `INSERT INTO sync_log (sync_type, sync_status, records_synced, error_message) VALUES (?, ?, ?, ?)`;
-            this.db.run(sql, [syncType, status, recordsCount, errorMessage], function(err) {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(this.lastID);
-                }
-            });
-        });
+        const sql = `INSERT INTO sync_log (sync_type, sync_status, records_synced, error_message) VALUES (?, ?, ?, ?)`;
+        return await this.dbRun(sql, [syncType, status, recordsCount, errorMessage]);
     }
 
     async getLastSync() {
-        return new Promise((resolve, reject) => {
-            const sql = `SELECT * FROM sync_log ORDER BY sync_timestamp DESC LIMIT 1`;
-            this.db.get(sql, [], (err, row) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(row);
-                }
-            });
-        });
+        const sql = `SELECT * FROM sync_log ORDER BY sync_timestamp DESC LIMIT 1`;
+        return await this.dbGet(sql, []);
     }
 
     async saveUserPreferences(userId = 'default', preferences) {
-        return new Promise((resolve, reject) => {
-            const sql = `
-                INSERT OR REPLACE INTO user_preferences
+        let sql, params;
+        
+        if (this.isPostgres) {
+            sql = `
+                INSERT INTO user_preferences
                 (user_id, opportunity_id, priority_color, intent_level, five_yard_line, follow_up_date, position_x, position_y, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
+                ON CONFLICT (user_id, opportunity_id)
+                DO UPDATE SET
+                    priority_color = EXCLUDED.priority_color,
+                    intent_level = EXCLUDED.intent_level,
+                    five_yard_line = EXCLUDED.five_yard_line,
+                    follow_up_date = EXCLUDED.follow_up_date,
+                    position_x = EXCLUDED.position_x,
+                    position_y = EXCLUDED.position_y,
+                    updated_at = CURRENT_TIMESTAMP
             `;
-            const params = [
+            params = [
                 userId,
                 preferences.opportunity_id,
                 preferences.priority_color || 'gray',
@@ -762,83 +985,93 @@ class DatabaseService {
                 preferences.position_x || null,
                 preferences.position_y || null
             ];
-            
-            this.db.run(sql, params, function(err) {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(this.changes);
-                }
-            });
-        });
-    }
-
-    async getUserPreferences(userId = 'default', opportunityId) {
-        return new Promise((resolve, reject) => {
-            const sql = `SELECT * FROM user_preferences WHERE user_id = ? AND opportunity_id = ?`;
-            this.db.get(sql, [userId, opportunityId], (err, row) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(row);
-                }
-            });
-        });
-    }
-
-    async getAllUserPreferences(userId = 'default') {
-        return new Promise((resolve, reject) => {
-            const sql = `SELECT * FROM user_preferences WHERE user_id = ?`;
-            this.db.all(sql, [userId], (err, rows) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(rows);
-                }
-            });
-        });
-    }
-
-    async saveMultipleUserPreferences(userId = 'default', preferencesArray) {
-        return new Promise((resolve, reject) => {
-            const stmt = this.db.prepare(`
+        } else {
+            sql = `
                 INSERT OR REPLACE INTO user_preferences
                 (user_id, opportunity_id, priority_color, intent_level, five_yard_line, follow_up_date, position_x, position_y, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            `);
+            `;
+            params = [
+                userId,
+                preferences.opportunity_id,
+                preferences.priority_color || 'gray',
+                preferences.intent_level || 5,
+                preferences.five_yard_line ? 1 : 0,
+                preferences.follow_up_date || null,
+                preferences.position_x || null,
+                preferences.position_y || null
+            ];
+        }
+        
+        return await this.dbRun(sql, params);
+    }
 
-            this.db.serialize(() => {
-                this.db.run("BEGIN TRANSACTION");
-                
-                try {
-                    preferencesArray.forEach(pref => {
-                        stmt.run([
-                            userId,
-                            pref.opportunity_id,
-                            pref.priority_color || 'gray',
-                            pref.intent_level || 5,
-                            pref.five_yard_line ? 1 : 0,
-                            pref.follow_up_date || null,
-                            pref.position_x || null,
-                            pref.position_y || null
-                        ]);
-                    });
-                    
-                    this.db.run("COMMIT", (err) => {
-                        if (err) {
-                            reject(err);
-                        } else {
-                            resolve(preferencesArray.length);
-                        }
-                    });
-                } catch (error) {
-                    this.db.run("ROLLBACK");
-                    reject(error);
-                } finally {
-                    stmt.finalize();
+    async getUserPreferences(userId = 'default', opportunityId) {
+        const sql = `SELECT * FROM user_preferences WHERE user_id = ? AND opportunity_id = ?`;
+        return await this.dbGet(sql, [userId, opportunityId]);
+    }
+
+    async getAllUserPreferences(userId = 'default') {
+        const sql = `SELECT * FROM user_preferences WHERE user_id = ?`;
+        return await this.dbAll(sql, [userId]);
+    }
+
+    async saveMultipleUserPreferences(userId = 'default', preferencesArray) {
+        if (this.isPostgres) {
+            // For PostgreSQL, use transaction
+            await this.db.query('BEGIN');
+            try {
+                for (const pref of preferencesArray) {
+                    await this.saveUserPreferences(userId, pref);
                 }
+                await this.db.query('COMMIT');
+                return preferencesArray.length;
+            } catch (error) {
+                await this.db.query('ROLLBACK');
+                throw error;
+            }
+        } else {
+            // For SQLite, use prepared statement transaction
+            return new Promise((resolve, reject) => {
+                const stmt = this.db.prepare(`
+                    INSERT OR REPLACE INTO user_preferences
+                    (user_id, opportunity_id, priority_color, intent_level, five_yard_line, follow_up_date, position_x, position_y, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                `);
+
+                this.db.serialize(() => {
+                    this.db.run("BEGIN TRANSACTION");
+                    
+                    try {
+                        preferencesArray.forEach(pref => {
+                            stmt.run([
+                                userId,
+                                pref.opportunity_id,
+                                pref.priority_color || 'gray',
+                                pref.intent_level || 5,
+                                pref.five_yard_line ? 1 : 0,
+                                pref.follow_up_date || null,
+                                pref.position_x || null,
+                                pref.position_y || null
+                            ]);
+                        });
+                        
+                        this.db.run("COMMIT", (err) => {
+                            if (err) {
+                                reject(err);
+                            } else {
+                                resolve(preferencesArray.length);
+                            }
+                        });
+                    } catch (error) {
+                        this.db.run("ROLLBACK");
+                        reject(error);
+                    } finally {
+                        stmt.finalize();
+                    }
+                });
             });
-        });
+        }
     }
 }
 
@@ -854,21 +1087,84 @@ setTimeout(() => {
 // API Routes
 app.get('/api/opportunities', async (req, res) => {
     try {
-        const { view = 'weekly', priority, week } = req.query;
+        const { view, priority, week } = req.query;
+        
+        console.log('API /opportunities called with query params:', { view, priority, week });
         
         const filters = {
-            excludeOwner: 'Roxy',
+            excludeOwners: ['Roxy', 'Rachel'],
             excludeUpgradeDesign: true,
             viewType: view,
             week: week,
             priority: priority
         };
         
+        console.log('Filters being applied:', filters);
+        
         const opportunities = await databaseService.getOpportunities(filters);
+        console.log(`Found ${opportunities.length} opportunities in database`);
+        
         res.json(opportunities);
     } catch (error) {
         console.error('API Error:', error);
         res.status(500).json({ error: 'Failed to fetch opportunities from database' });
+    }
+});
+
+// Add debug endpoint to see all data without filters
+app.get('/api/debug/opportunities', async (req, res) => {
+    try {
+        const sql = `SELECT COUNT(*) as total FROM opportunities`;
+        const countResult = await databaseService.dbGet(sql, []);
+        console.log('Total opportunities in database:', countResult);
+        
+        const sampleSql = `SELECT * FROM opportunities LIMIT 5`;
+        const sampleRows = await databaseService.dbAll(sampleSql, []);
+        console.log('Sample opportunities:', sampleRows);
+        
+        res.json({
+            total: countResult.total,
+            sample: sampleRows
+        });
+    } catch (error) {
+        console.error('Debug API Error:', error);
+        res.status(500).json({ error: 'Failed to debug opportunities' });
+    }
+});
+
+// Fix existing records with null is_active values
+app.post('/api/fix/is_active', async (req, res) => {
+    try {
+        const sql = `UPDATE opportunities SET is_active = 1 WHERE is_active IS NULL`;
+        const result = await databaseService.dbRun(sql, []);
+        console.log('Fixed is_active for records:', result);
+        
+        res.json({
+            success: true,
+            message: `Updated ${result.changes} records to set is_active = 1`,
+            changes: result.changes
+        });
+    } catch (error) {
+        console.error('Fix is_active Error:', error);
+        res.status(500).json({ error: 'Failed to fix is_active values' });
+    }
+});
+
+// Fix user preferences table constraint
+app.post('/api/fix/user_preferences_constraint', async (req, res) => {
+    try {
+        const sql = `ALTER TABLE user_preferences ADD CONSTRAINT user_preferences_unique_user_opportunity UNIQUE (user_id, opportunity_id)`;
+        const result = await databaseService.dbRun(sql, []);
+        console.log('Added unique constraint for user_preferences:', result);
+        
+        res.json({
+            success: true,
+            message: 'Added unique constraint for user preferences',
+            result: result
+        });
+    } catch (error) {
+        console.error('Fix constraint Error:', error);
+        res.status(500).json({ error: 'Failed to add constraint', details: error.message });
     }
 });
 
@@ -1018,18 +1314,6 @@ app.get('/', (req, res) => {
 app.listen(PORT, async () => {
     console.log(`Server running on http://localhost:${PORT}`);
     
-    // Check if we need to do initial sync
-    try {
-        const lastSync = await databaseService.getLastSync();
-        if (!lastSync) {
-            console.log('No previous sync found. Performing initial sync from Salesforce...');
-            await databaseService.syncFromSalesforce(salesforceService);
-            console.log('Initial sync completed!');
-        } else {
-            console.log(`Last sync: ${lastSync.sync_timestamp} (${lastSync.records_synced} records)`);
-        }
-    } catch (error) {
-        console.error('Initial sync failed:', error.message);
-        console.log('Dashboard will work with empty data. Use /api/sync to manually sync.');
-    }
+    // Auto-sync temporarily disabled - account locked due to failed attempts
+    console.log('Auto-sync disabled to prevent account lockout. Unlock user account in Salesforce, then use /api/sync to test.');
 });

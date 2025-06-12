@@ -9,17 +9,30 @@
 </head>
 <body>
     <div class="dashboard-container">
+        <!-- Date indicator moved to top left -->
+        <div class="today-indicator-floating">
+            <div class="today-date" id="today-date">Today: Loading...</div>
+        </div>
+        
         <!-- Header -->
         <header class="dashboard-header">
-            <div class="today-indicator">
-                <div class="today-date" id="today-date">Today: Loading...</div>
-            </div>
             <div class="view-tabs">
                 <button id="weekly-btn" class="view-tab active" data-view="weekly">Weekly View</button>
                 <button id="fiveyard-btn" class="view-tab" data-view="fiveyard">Five-Yard View</button>
                 <button id="followups-btn" class="view-tab" data-view="followups">Follow-ups</button>
+                <button id="search-btn" class="view-tab" data-view="search">Search All</button>
             </div>
             <div class="header-controls">
+                <div class="search-container">
+                    <div class="search-input-wrapper">
+                        <i class="fas fa-search search-icon"></i>
+                        <input type="text" id="search-input" class="search-input" placeholder="Search opportunities, accounts, locations...">
+                        <button id="clear-search-btn" class="clear-search-btn" title="Clear search">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div id="search-results-count" class="search-results-count"></div>
+                </div>
                 <div class="week-navigation">
                     <button id="week-prev-btn" class="week-nav-btn" title="Previous Week">
                         <i class="fas fa-chevron-left"></i>
@@ -156,6 +169,46 @@
             </div>
         </div>
 
+        <!-- Search All View -->
+        <div id="search-view" class="view-container">
+            <div class="view-header">
+                <h2>Search All Opportunities</h2>
+                <div class="search-all-controls">
+                    <div class="search-all-input-wrapper">
+                        <i class="fas fa-search search-all-icon"></i>
+                        <input type="text" id="search-all-input" class="search-all-input" placeholder="Search across all opportunities, accounts, stages, locations, notes...">
+                        <button id="clear-search-all-btn" class="clear-search-all-btn" title="Clear search">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="search-all-stats">
+                        <span id="search-all-count" class="search-all-count">Enter a search term to find opportunities</span>
+                        <span id="search-all-total" class="search-all-total"></span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="search-all-board">
+                <div id="search-all-cards" class="search-all-cards-container">
+                    <div class="search-all-placeholder">
+                        <i class="fas fa-search search-placeholder-icon"></i>
+                        <h3>Search All Your Opportunities</h3>
+                        <p>Search across all opportunities in your database by:</p>
+                        <ul class="search-capabilities">
+                            <li><i class="fas fa-user"></i> Account names</li>
+                            <li><i class="fas fa-building"></i> Company names</li>
+                            <li><i class="fas fa-map-marker-alt"></i> Locations</li>
+                            <li><i class="fas fa-tasks"></i> Stages</li>
+                            <li><i class="fas fa-sticky-note"></i> Notes & descriptions</li>
+                            <li><i class="fas fa-dollar-sign"></i> Amounts</li>
+                            <li><i class="fas fa-tag"></i> Opportunity IDs</li>
+                        </ul>
+                        <p class="search-hint">Start typing above to search through all your opportunities...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Opportunity Card Modal -->
         <div id="card-modal" class="modal hidden">
             <div class="modal-content">
@@ -205,8 +258,12 @@
                                 <button type="button" id="clear-followup-btn" class="clear-followup-btn">Clear</button>
                                 <button type="button" id="complete-followup-btn" class="complete-followup-btn">Complete Follow-up</button>
                             </div>
-                            <div class="followup-note">
-                                <small>Set a follow-up date to be reminded on that day</small>
+                            <div class="quick-followup-buttons">
+                                <button type="button" class="quick-day-btn" data-days="1">1</button>
+                                <button type="button" class="quick-day-btn" data-days="2">2</button>
+                                <button type="button" class="quick-day-btn" data-days="3">3</button>
+                                <button type="button" class="quick-day-btn" data-days="4">4</button>
+                                <button type="button" class="quick-day-btn" data-days="5">5</button>
                             </div>
                         </div>
                         <button id="save-changes-btn" class="save-btn">Save Changes</button>
