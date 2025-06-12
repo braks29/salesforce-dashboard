@@ -271,13 +271,18 @@ class SalesforceService {
 // OpenAI Engagement Analysis Service
 class EngagementAnalysisService {
     constructor() {
-        this.openai = new OpenAI({
-            apiKey: process.env.OPENAI_API_KEY
-        });
+        if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'your-openai-api-key-here') {
+            this.openai = new OpenAI({
+                apiKey: process.env.OPENAI_API_KEY
+            });
+        } else {
+            console.log('OpenAI API key not configured - AI features will be disabled');
+            this.openai = null;
+        }
     }
 
     async analyzeEngagement(opportunity) {
-        if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY === 'your-openai-api-key-here') {
+        if (!this.openai) {
             return {
                 engagement: 'OpenAI API key not configured',
                 hasEngagement: false,
