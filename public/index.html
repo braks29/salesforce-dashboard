@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Salesforce Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+    <div class="dashboard-container">
+        <!-- Header -->
+        <header class="dashboard-header">
+            <div class="today-indicator">
+                <div class="today-date" id="today-date">Today: Loading...</div>
+            </div>
+            <div class="view-tabs">
+                <button id="weekly-btn" class="view-tab active" data-view="weekly">Weekly View</button>
+                <button id="fiveyard-btn" class="view-tab" data-view="fiveyard">Five-Yard View</button>
+                <button id="followups-btn" class="view-tab" data-view="followups">Follow-ups</button>
+            </div>
+            <div class="header-controls">
+                <div class="week-navigation">
+                    <button id="week-prev-btn" class="week-nav-btn" title="Previous Week">
+                        <i class="fas fa-chevron-left"></i>
+                    </button>
+                    <input type="week" id="week-picker" class="week-picker">
+                    <button id="week-next-btn" class="week-nav-btn" title="Next Week">
+                        <i class="fas fa-chevron-right"></i>
+                    </button>
+                </div>
+                <select id="priority-select" class="priority-select">
+                    <option value="">All Priorities</option>
+                    <option value="red">High Priority (Red)</option>
+                    <option value="yellow">Medium Priority (Yellow)</option>
+                    <option value="green">Low Priority (Green)</option>
+                    <option value="blue">Info Priority (Blue)</option>
+                    <option value="gray">No Priority (Gray)</option>
+                </select>
+                <button id="sync-btn" class="sync-btn">
+                    <i class="fas fa-sync-alt"></i>
+                    Sync SF
+                </button>
+                <div id="sync-status" class="sync-status hidden">
+                    <span id="sync-text">Never synced</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Loading Indicator -->
+        <div id="loading" class="loading hidden">
+            <i class="fas fa-spinner fa-spin"></i>
+            Loading opportunities...
+        </div>
+
+        <!-- Error Message -->
+        <div id="error-message" class="error-message hidden">
+            <i class="fas fa-exclamation-triangle"></i>
+            <span id="error-text"></span>
+        </div>
+
+        <!-- Weekly View -->
+        <div id="weekly-view" class="view-container active">
+            <div class="weekly-board">
+                <div class="day-column" data-day="monday">
+                    <div class="day-header">
+                        <h3>Monday</h3>
+                    </div>
+                    <div class="day-cards" id="monday-cards"></div>
+                </div>
+                <div class="day-column" data-day="tuesday">
+                    <div class="day-header">
+                        <h3>Tuesday</h3>
+                    </div>
+                    <div class="day-cards" id="tuesday-cards"></div>
+                </div>
+                <div class="day-column" data-day="wednesday">
+                    <div class="day-header">
+                        <h3>Wednesday</h3>
+                    </div>
+                    <div class="day-cards" id="wednesday-cards"></div>
+                </div>
+                <div class="day-column" data-day="thursday">
+                    <div class="day-header">
+                        <h3>Thursday</h3>
+                    </div>
+                    <div class="day-cards" id="thursday-cards"></div>
+                </div>
+                <div class="day-column" data-day="friday">
+                    <div class="day-header">
+                        <h3>Friday</h3>
+                    </div>
+                    <div class="day-cards" id="friday-cards"></div>
+                </div>
+                <div class="day-column" data-day="weekend">
+                    <div class="day-header">
+                        <h3>Weekend</h3>
+                    </div>
+                    <div class="day-cards" id="weekend-cards"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Five-Yard View -->
+        <div id="fiveyard-view" class="view-container">
+            <div class="view-header">
+                <h2>Adam we have bills to pay!!🙂</h2>
+                <div class="view-stats">
+                    <span class="stat">
+                        <i class="fas fa-exclamation-circle"></i>
+                        Need Follow-up: <span id="fiveyard-followup">0</span>
+                    </span>
+                </div>
+            </div>
+            
+            <!-- Horizontal Five-Yard Board -->
+            <div class="horizontal-board">
+                <div class="intent-scale">
+                    <div class="scale-label left">Further from Closing</div>
+                    <div class="scale-markers">
+                        <div class="marker" data-intent="1">1</div>
+                        <div class="marker" data-intent="2">2</div>
+                        <div class="marker" data-intent="3">3</div>
+                        <div class="marker" data-intent="4">4</div>
+                        <div class="marker" data-intent="5">5</div>
+                        <div class="marker" data-intent="6">6</div>
+                        <div class="marker" data-intent="7">7</div>
+                        <div class="marker" data-intent="8">8</div>
+                        <div class="marker" data-intent="9">9</div>
+                        <div class="marker" data-intent="10">10</div>
+                    </div>
+                    <div class="scale-label right">Closer to Wiring Money</div>
+                </div>
+                
+                <div class="horizontal-drop-zone" id="horizontal-cards">
+                    <!-- Cards will be positioned here based on intent level -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Follow-ups View -->
+        <div id="followups-view" class="view-container">
+            <div class="view-header">
+                <h2>Follow-ups</h2>
+                <div class="followups-controls">
+                    <label for="followup-date-filter">View follow-ups for:</label>
+                    <input type="date" id="followup-date-filter" class="followup-date-filter">
+                    <span id="followup-count" class="followup-count">0 follow-ups</span>
+                </div>
+            </div>
+            
+            <div class="followups-board">
+                <div id="followups-cards" class="followups-cards-container">
+                    <!-- Follow-up cards will be displayed here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Opportunity Card Modal -->
+        <div id="card-modal" class="modal hidden">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="modal-title"></h3>
+                    <button class="close-btn" id="close-modal">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <!-- Manual Controls Section -->
+                    <div class="modal-section controls-section">
+                        <div class="control-group">
+                            <label>
+                                <input type="checkbox" id="modal-fiveyard-checkbox"> Five-Yard Line
+                            </label>
+                        </div>
+                        <div class="control-group">
+                            <label>Priority Color:</label>
+                            <div class="priority-button-group" id="modal-priority-buttons">
+                                <button type="button" class="priority-btn" data-priority="red">high</button>
+                                <button type="button" class="priority-btn" data-priority="yellow">medium</button>
+                                <button type="button" class="priority-btn" data-priority="green">low</button>
+                                <button type="button" class="priority-btn" data-priority="gray">none</button>
+                                <button type="button" class="priority-btn" data-priority="blue">follow-up</button>
+                            </div>
+                        </div>
+                        <div class="control-group">
+                            <label>Intent Level (1-10):</label>
+                            <div class="intent-button-group" id="modal-intent-buttons">
+                                <button type="button" class="intent-btn" data-intent="1">1</button>
+                                <button type="button" class="intent-btn" data-intent="2">2</button>
+                                <button type="button" class="intent-btn" data-intent="3">3</button>
+                                <button type="button" class="intent-btn" data-intent="4">4</button>
+                                <button type="button" class="intent-btn" data-intent="5">5</button>
+                                <button type="button" class="intent-btn" data-intent="6">6</button>
+                                <button type="button" class="intent-btn" data-intent="7">7</button>
+                                <button type="button" class="intent-btn" data-intent="8">8</button>
+                                <button type="button" class="intent-btn" data-intent="9">9</button>
+                                <button type="button" class="intent-btn" data-intent="10">10</button>
+                            </div>
+                        </div>
+                        <div class="control-group followup-group">
+                            <label for="followup-date-picker">Follow-up Date:</label>
+                            <div class="followup-controls">
+                                <input type="date" id="followup-date-picker" class="followup-date-input">
+                                <button type="button" id="clear-followup-btn" class="clear-followup-btn">Clear</button>
+                                <button type="button" id="complete-followup-btn" class="complete-followup-btn">Complete Follow-up</button>
+                            </div>
+                            <div class="followup-note">
+                                <small>Set a follow-up date to be reminded on that day</small>
+                            </div>
+                        </div>
+                        <button id="save-changes-btn" class="save-btn">Save Changes</button>
+                    </div>
+                    
+                    <!-- Existing Info Sections -->
+                    <div class="modal-section">
+                        <label>Account:</label>
+                        <span id="modal-account"></span>
+                    </div>
+                    <div class="modal-section">
+                        <label>Owner:</label>
+                        <span id="modal-owner"></span>
+                    </div>
+                    <div class="modal-section">
+                        <label>Amount:</label>
+                        <span id="modal-amount"></span>
+                    </div>
+                    <div class="modal-section">
+                        <label>Close Date:</label>
+                        <span id="modal-closedate"></span>
+                    </div>
+                    <div class="modal-section">
+                        <label>Created Date:</label>
+                        <span id="modal-createddate"></span>
+                    </div>
+                    <div class="modal-section">
+                        <label>Stage:</label>
+                        <span id="modal-stage"></span>
+                    </div>
+                    <div class="modal-section" id="closed-lost-section" style="display: none;">
+                        <label>Closed Lost Reason:</label>
+                        <span id="modal-closed-lost-reason" class="closed-lost-reason"></span>
+                    </div>
+                    <div class="modal-section">
+                        <label>Next Step:</label>
+                        <span id="modal-nextstep"></span>
+                    </div>
+                    <div class="modal-section">
+                        <label>Description:</label>
+                        <p id="modal-description"></p>
+                    </div>
+                    <div class="modal-section" id="tasks-section">
+                        <label>Open Tasks:</label>
+                        <ul id="modal-tasks"></ul>
+                    </div>
+                    <div class="modal-section" id="notes-section">
+                        <label>Latest Note:</label>
+                        <p id="modal-notes"></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="dashboard.js"></script>
+</body>
+</html>
